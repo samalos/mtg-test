@@ -240,45 +240,69 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
     link: searchUrl,
   };
 
-  // Try multiple URL patterns
-  const urlsToTry = [
-    `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`,
-    `https://basaari.com/?searchTerm=${encodeURIComponent(cardName)}`,
-    `https://basaari.com/api/products?searchTerm=${encodeURIComponent(cardName)}`,
+  // Try Shopify search/suggest API first (common Shopify endpoint)
+  const shopifyUrls = [
+    `https://basaari.com/search/suggest.json?q=${encodeURIComponent(cardName)}&resources[type]=product&resources[limit]=10`,
+    `https://basaari.com/api/search?q=${encodeURIComponent(cardName)}`,
   ];
 
-  for (const url of urlsToTry) {
-    console.log(`[Basaari] Trying: ${url}`);
+  for (const url of shopifyUrls) {
+    try {
+      console.log(`[Basaari] Trying Shopify API: ${url}`);
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`[Basaari] Got Shopify API response`);
+
+        // Parse Shopify suggest response
+        const resources = (data as {resources?: {results?: {products?: Array<{title: string; price: string; variants?: Array<{price: string}>}>}}}).resources;
+        const products = resources?.results?.products || [];
+
+        for (const product of products) {
+          const title = product.title || '';
+          if (cardNamesMatch(cardName, title)) {
+            const priceStr = product.variants?.[0]?.price || product.price;
+            const price = parseFloat(priceStr);
+            if (price > 0) {
+              baseResult.price = price.toFixed(2);
+              baseResult.availability = 'in_stock';
+              console.log(`[Basaari] Shopify match: "${title}" at €${price}`);
+              return baseResult;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`[Basaari] Shopify API error:`, (error as Error).message);
+    }
+  }
+
+  // Fallback: try HTML pages with proxy
+  const htmlUrls = [
+    `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`,
+    `https://basaari.com/?searchTerm=${encodeURIComponent(cardName)}`,
+  ];
+
+  for (const url of htmlUrls) {
+    console.log(`[Basaari] Trying HTML: ${url}`);
     const html = await fetchWithProxy(url);
     if (!html) continue;
 
-    // Check if it's JSON (API response)
-    if (html.trim().startsWith('{') || html.trim().startsWith('[')) {
-      try {
-        const data = JSON.parse(html);
-        const products = extractBasaariProductsFromApi(data, cardName);
-        if (products.length > 0) {
-          const firstMatch = products[0];
-          baseResult.price = firstMatch.price.toFixed(2);
-          baseResult.availability = 'in_stock';
-          baseResult.link = `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`;
-          console.log(`[Basaari] API match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
-          return baseResult;
-        }
-      } catch (e) {
-        console.error('[Basaari] Failed to parse API JSON');
-      }
-    }
-
-    // Parse as HTML
     const products = extractBasaariProducts(html, cardName);
-    console.log(`[Basaari] Found ${products.length} matching products from ${url}`);
+    console.log(`[Basaari] Found ${products.length} matching products`);
 
     if (products.length > 0) {
       const firstMatch = products[0];
       baseResult.price = firstMatch.price.toFixed(2);
       baseResult.availability = 'in_stock';
-      console.log(`[Basaari] First match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
+      console.log(`[Basaari] HTML match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
       return baseResult;
     }
   }
@@ -354,18 +378,6 @@ export async function GET(request: NextRequest) {
     poromagiaResult,
     basaariResult,
   ];
-
-  if (scryfallData && scryfallData.prices.usd) {
-    results.push({
-      store: 'scryfall',
-      storeName: 'TCGPlayer (USD)',
-      storeUrl: 'https://scryfall.com',
-      price: scryfallData.prices.usd,
-      currency: 'USD',
-      availability: 'in_stock',
-      link: scryfallData.scryfall_uri,
-    });
-  }
 
   return NextResponse.json({
     cardName: scryfallData?.name || cardName,
