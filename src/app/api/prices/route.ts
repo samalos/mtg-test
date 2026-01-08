@@ -32,6 +32,71 @@ async function fetchFromScryfall(cardName: string): Promise<ScryfallCard | null>
   }
 }
 
+// Helper to try fetching with proxy fallback
+async function fetchWithProxy(url: string, timeout = 15000): Promise<string | null> {
+  const urls = [
+    url,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  ];
+
+  for (const fetchUrl of urls) {
+    try {
+      const isProxy = fetchUrl !== url;
+      const response = await fetch(fetchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'fi-FI,fi;q=0.9,en;q=0.8',
+        },
+        signal: AbortSignal.timeout(timeout),
+        cache: 'no-store',
+      });
+
+      if (response.ok) {
+        const html = await response.text();
+        console.log(`[Fetch] Got ${html.length} bytes from ${isProxy ? 'proxy' : 'direct'}: ${url.split('?')[0]}`);
+        if (html.length > 1000) return html; // Ensure we got real content
+      } else {
+        console.error(`[Fetch] HTTP ${response.status} from ${isProxy ? 'proxy' : 'direct'}`);
+      }
+    } catch (error) {
+      const isProxy = fetchUrl !== url;
+      console.error(`[Fetch] Error (${isProxy ? 'proxy' : 'direct'}):`, (error as Error).message);
+    }
+  }
+  return null;
+}
+
+function extractPricesFromHtml(html: string): number[] {
+  const prices: number[] = [];
+
+  // Method 1: Decimal('X.XX') patterns from ecommerce tracking
+  const decimalRegex = /Decimal\('([0-9]+\.[0-9]+)'\)/g;
+  let match;
+  while ((match = decimalRegex.exec(html)) !== null) {
+    prices.push(parseFloat(match[1]));
+  }
+
+  // Method 2: Euro prices €X.XX or X,XX €
+  const euroMatches = html.match(/(\d+)[,.](\d{2})\s*€|€\s*(\d+)[,.](\d{2})/g) || [];
+  for (const p of euroMatches) {
+    const cleaned = p.replace('€', '').replace(',', '.').trim();
+    const val = parseFloat(cleaned);
+    if (!isNaN(val) && val > 0) prices.push(val);
+  }
+
+  // Method 3: JSON "price":X.XX patterns
+  const jsonRegex = /"price"\s*:\s*(\d+\.?\d*)/g;
+  while ((match = jsonRegex.exec(html)) !== null) {
+    const val = parseFloat(match[1]);
+    if (val > 0) prices.push(val);
+  }
+
+  // Filter reasonable card prices
+  return prices.filter(p => p >= 0.05 && p <= 5000);
+}
+
 async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
   const searchUrl = `https://poromagia.com/en/search/?q=${encodeURIComponent(cardName)}`;
   const baseResult: PriceResult = {
@@ -44,59 +109,20 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
     link: searchUrl,
   };
 
-  try {
-    const response = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'fi-FI,fi;q=0.9,en;q=0.8',
-      },
-      signal: AbortSignal.timeout(15000),
-      cache: 'no-store',
-    });
+  const html = await fetchWithProxy(searchUrl);
+  if (!html) return baseResult;
 
-    if (!response.ok) {
-      console.error(`[Poromagia] HTTP ${response.status}`);
-      return baseResult;
-    }
+  const prices = extractPricesFromHtml(html);
+  console.log(`[Poromagia] Found ${prices.length} total prices`);
 
-    const html = await response.text();
-    console.log(`[Poromagia] Got ${html.length} bytes`);
-
-    // Method 1: Look for Decimal prices in the ecommerce data
-    const decimalPrices: number[] = [];
-    const decimalRegex = /Decimal\('([0-9]+\.[0-9]+)'\)/g;
-    let match;
-    while ((match = decimalRegex.exec(html)) !== null) {
-      decimalPrices.push(parseFloat(match[1]));
-    }
-    console.log(`[Poromagia] Found ${decimalPrices.length} Decimal prices`);
-
-    // Method 2: Look for euro prices like €X.XX or X,XX €
-    const euroMatches = html.match(/(\d+)[,.](\d{2})\s*€|€\s*(\d+)[,.](\d{2})/g) || [];
-    const euroPrices = euroMatches.map(p => {
-      const cleaned = p.replace('€', '').replace(',', '.').trim();
-      return parseFloat(cleaned);
-    }).filter(p => !isNaN(p) && p > 0);
-    console.log(`[Poromagia] Found ${euroPrices.length} euro prices`);
-
-    // Combine all prices and filter reasonable card prices (0.10 to 5000)
-    const allPrices = [...decimalPrices, ...euroPrices]
-      .filter(p => p >= 0.10 && p <= 5000);
-
-    if (allPrices.length > 0) {
-      // Get the lowest price (most likely the cheapest version)
-      const lowestPrice = Math.min(...allPrices);
-      baseResult.price = lowestPrice.toFixed(2);
-      baseResult.availability = 'in_stock';
-      console.log(`[Poromagia] Lowest price: €${lowestPrice.toFixed(2)}`);
-    }
-
-    return baseResult;
-  } catch (error) {
-    console.error('[Poromagia] Error:', error);
-    return baseResult;
+  if (prices.length > 0) {
+    const lowestPrice = Math.min(...prices);
+    baseResult.price = lowestPrice.toFixed(2);
+    baseResult.availability = 'in_stock';
+    console.log(`[Poromagia] Lowest: €${lowestPrice.toFixed(2)}`);
   }
+
+  return baseResult;
 }
 
 async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
@@ -111,59 +137,20 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
     link: searchUrl,
   };
 
-  try {
-    const response = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'fi-FI,fi;q=0.9,en;q=0.8',
-      },
-      signal: AbortSignal.timeout(15000),
-      cache: 'no-store',
-    });
+  const html = await fetchWithProxy(searchUrl);
+  if (!html) return baseResult;
 
-    if (!response.ok) {
-      console.error(`[Basaari] HTTP ${response.status}`);
-      return baseResult;
-    }
+  const prices = extractPricesFromHtml(html);
+  console.log(`[Basaari] Found ${prices.length} total prices`);
 
-    const html = await response.text();
-    console.log(`[Basaari] Got ${html.length} bytes`);
-
-    // Method 1: Look for JSON price patterns like "price":1.23
-    const jsonPriceRegex = /"price"\s*:\s*(\d+\.?\d*)/g;
-    const jsonPrices: number[] = [];
-    let match;
-    while ((match = jsonPriceRegex.exec(html)) !== null) {
-      const price = parseFloat(match[1]);
-      if (price > 0) jsonPrices.push(price);
-    }
-    console.log(`[Basaari] Found ${jsonPrices.length} JSON prices`);
-
-    // Method 2: Look for euro prices
-    const euroMatches = html.match(/(\d+)[,.](\d{2})\s*€|€\s*(\d+)[,.](\d{2})/g) || [];
-    const euroPrices = euroMatches.map(p => {
-      const cleaned = p.replace('€', '').replace(',', '.').trim();
-      return parseFloat(cleaned);
-    }).filter(p => !isNaN(p) && p > 0);
-    console.log(`[Basaari] Found ${euroPrices.length} euro prices`);
-
-    // Combine and filter
-    const allPrices = [...jsonPrices, ...euroPrices]
-      .filter(p => p >= 0.05 && p <= 5000);
-
-    if (allPrices.length > 0) {
-      const lowestPrice = Math.min(...allPrices);
-      baseResult.price = lowestPrice.toFixed(2);
-      baseResult.availability = 'in_stock';
-      console.log(`[Basaari] Lowest price: €${lowestPrice.toFixed(2)}`);
-    }
-
-    return baseResult;
-  } catch (error) {
-    console.error('[Basaari] Error:', error);
-    return baseResult;
+  if (prices.length > 0) {
+    const lowestPrice = Math.min(...prices);
+    baseResult.price = lowestPrice.toFixed(2);
+    baseResult.availability = 'in_stock';
+    console.log(`[Basaari] Lowest: €${lowestPrice.toFixed(2)}`);
   }
+
+  return baseResult;
 }
 
 function getCardmarketResult(cardName: string, scryfallData: ScryfallCard | null): PriceResult {
