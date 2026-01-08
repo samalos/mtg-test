@@ -76,10 +76,11 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
     // Look for patterns like: "name": "Lightning Bolt - Set", ... "excl_tax": Decimal('X.XX'), "tax": Decimal('Y.YY')
     const products: { name: string; price: number; url: string }[] = [];
 
-    // Method 1: Parse the FixedPrice format
-    const fixedPriceRegex = /"name":\s*"([^"]+)"[^}]*?"excl_tax":\s*Decimal\('([0-9.]+)'\)[^}]*?"tax":\s*Decimal\('([0-9.]+)'\)[^}]*?"url":\s*"([^"]+)"/g;
+    // Method 1: Parse the FixedPrice format embedded in JSON
+    // Format: {"name": "Card Name", ..., "price": "FixedPrice({'currency': 'EUR', 'excl_tax': Decimal('X.XX'), 'tax': Decimal('Y.YY')})", ..., "url": "/path"}
+    const productRegex = /\{"name":\s*"([^"]+)"[^{]*?"price":\s*"FixedPrice\(\{'currency':\s*'EUR',\s*'excl_tax':\s*Decimal\('([0-9.]+)'\),\s*'tax':\s*Decimal\('([0-9.]+)'\)\}\)"[^{]*?"url":\s*"([^"]+)"\}/g;
     let match;
-    while ((match = fixedPriceRegex.exec(html)) !== null) {
+    while ((match = productRegex.exec(html)) !== null) {
       const [, name, exclTax, tax, url] = match;
       products.push({
         name,
