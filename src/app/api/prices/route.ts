@@ -32,7 +32,6 @@ async function fetchFromScryfall(cardName: string): Promise<ScryfallCard | null>
   }
 }
 
-// Helper to try fetching with proxy fallback
 async function fetchWithProxy(url: string, timeout = 15000): Promise<string | null> {
   const urls = [
     url,
@@ -55,46 +54,122 @@ async function fetchWithProxy(url: string, timeout = 15000): Promise<string | nu
 
       if (response.ok) {
         const html = await response.text();
-        console.log(`[Fetch] Got ${html.length} bytes from ${isProxy ? 'proxy' : 'direct'}: ${url.split('?')[0]}`);
-        if (html.length > 1000) return html; // Ensure we got real content
-      } else {
-        console.error(`[Fetch] HTTP ${response.status} from ${isProxy ? 'proxy' : 'direct'}`);
+        console.log(`[Fetch] Got ${html.length} bytes from ${isProxy ? 'proxy' : 'direct'}`);
+        if (html.length > 1000) return html;
       }
     } catch (error) {
-      const isProxy = fetchUrl !== url;
-      console.error(`[Fetch] Error (${isProxy ? 'proxy' : 'direct'}):`, (error as Error).message);
+      console.error(`[Fetch] Error:`, (error as Error).message);
     }
   }
   return null;
 }
 
-function extractPricesFromHtml(html: string): number[] {
-  const prices: number[] = [];
+function normalizeCardName(name: string): string {
+  return name.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  // Method 1: Decimal('X.XX') patterns from ecommerce tracking
-  const decimalRegex = /Decimal\('([0-9]+\.[0-9]+)'\)/g;
+function cardNamesMatch(searchName: string, foundName: string): boolean {
+  const normalizedSearch = normalizeCardName(searchName);
+  const normalizedFound = normalizeCardName(foundName);
+
+  // Exact match
+  if (normalizedFound === normalizedSearch) return true;
+
+  // Found name starts with search name (e.g., "Lightning Bolt - Revised" matches "Lightning Bolt")
+  if (normalizedFound.startsWith(normalizedSearch)) return true;
+
+  // All words from search appear in found name
+  const searchWords = normalizedSearch.split(' ');
+  return searchWords.every(word => normalizedFound.includes(word));
+}
+
+interface ProductMatch {
+  name: string;
+  price: number;
+}
+
+function extractPoromagiaProducts(html: string, searchName: string): ProductMatch[] {
+  const products: ProductMatch[] = [];
+
+  // Method 1: Parse the ecommerce JSON data with name-price pairs
+  // Format: {"name": "Lightning Bolt - Set", ..., "price": "FixedPrice({...excl_tax': Decimal('X.XX'), 'tax': Decimal('Y.YY')...})"
+  const productJsonRegex = /"name":\s*"([^"]+)"[^}]*?"price":\s*"FixedPrice\(\{[^}]*'excl_tax':\s*Decimal\('([0-9.]+)'\)[^}]*'tax':\s*Decimal\('([0-9.]+)'\)/g;
   let match;
-  while ((match = decimalRegex.exec(html)) !== null) {
-    prices.push(parseFloat(match[1]));
+  while ((match = productJsonRegex.exec(html)) !== null) {
+    const [, name, exclTax, tax] = match;
+    const totalPrice = parseFloat(exclTax) + parseFloat(tax);
+    if (cardNamesMatch(searchName, name) && totalPrice > 0) {
+      products.push({ name, price: totalPrice });
+    }
   }
 
-  // Method 2: Euro prices €X.XX or X,XX €
-  const euroMatches = html.match(/(\d+)[,.](\d{2})\s*€|€\s*(\d+)[,.](\d{2})/g) || [];
-  for (const p of euroMatches) {
-    const cleaned = p.replace('€', '').replace(',', '.').trim();
-    const val = parseFloat(cleaned);
-    if (!isNaN(val) && val > 0) prices.push(val);
+  // Method 2: Look for product cards with price_color class
+  // Pattern: <h4 class="text">Card Name</h4>...<p class="price_color">€X.XX</p>
+  const productCardRegex = /<article[^>]*class="[^"]*product[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
+  while ((match = productCardRegex.exec(html)) !== null) {
+    const cardHtml = match[1];
+
+    // Extract card name from title/heading
+    const nameMatch = cardHtml.match(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>/i) ||
+                      cardHtml.match(/class="[^"]*title[^"]*"[^>]*>([^<]+)</i) ||
+                      cardHtml.match(/alt="([^"]+)"/i);
+
+    // Extract price from price_color class or similar
+    const priceMatch = cardHtml.match(/class="[^"]*price[^"]*"[^>]*>([^<]*€[^<]*|[^<]*[0-9]+[,.][0-9]{2}[^<]*)</i) ||
+                       cardHtml.match(/€\s*([0-9]+[,.][0-9]{2})/);
+
+    if (nameMatch && priceMatch) {
+      const name = nameMatch[1].trim();
+      const priceStr = priceMatch[1] || priceMatch[0];
+      const price = parseFloat(priceStr.replace('€', '').replace(',', '.').trim());
+
+      if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
+        products.push({ name, price });
+      }
+    }
   }
 
-  // Method 3: JSON "price":X.XX patterns
-  const jsonRegex = /"price"\s*:\s*(\d+\.?\d*)/g;
-  while ((match = jsonRegex.exec(html)) !== null) {
-    const val = parseFloat(match[1]);
-    if (val > 0) prices.push(val);
+  // Method 3: Look for structured data patterns
+  const structuredRegex = /itemprop="name"[^>]*>([^<]+)<[\s\S]*?itemprop="price"[^>]*content="([0-9.]+)"/gi;
+  while ((match = structuredRegex.exec(html)) !== null) {
+    const [, name, priceStr] = match;
+    const price = parseFloat(priceStr);
+    if (cardNamesMatch(searchName, name) && price > 0) {
+      products.push({ name, price });
+    }
   }
 
-  // Filter reasonable card prices
-  return prices.filter(p => p >= 0.05 && p <= 5000);
+  return products;
+}
+
+function extractBasaariProducts(html: string, searchName: string): ProductMatch[] {
+  const products: ProductMatch[] = [];
+
+  // Look for JSON product data with title and price
+  const jsonProductRegex = /"title"\s*:\s*"([^"]+)"[\s\S]*?"price"\s*:\s*([0-9.]+)/g;
+  let match;
+  while ((match = jsonProductRegex.exec(html)) !== null) {
+    const [, name, priceStr] = match;
+    const price = parseFloat(priceStr);
+    if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
+      products.push({ name, price });
+    }
+  }
+
+  // Also try reverse order: price then title
+  const reverseRegex = /"price"\s*:\s*([0-9.]+)[\s\S]*?"title"\s*:\s*"([^"]+)"/g;
+  while ((match = reverseRegex.exec(html)) !== null) {
+    const [, priceStr, name] = match;
+    const price = parseFloat(priceStr);
+    if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
+      products.push({ name, price });
+    }
+  }
+
+  return products;
 }
 
 async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
@@ -112,14 +187,15 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
   const html = await fetchWithProxy(searchUrl);
   if (!html) return baseResult;
 
-  const prices = extractPricesFromHtml(html);
-  console.log(`[Poromagia] Found ${prices.length} total prices`);
+  const products = extractPoromagiaProducts(html, cardName);
+  console.log(`[Poromagia] Found ${products.length} matching products for "${cardName}"`);
 
-  if (prices.length > 0) {
-    const lowestPrice = Math.min(...prices);
-    baseResult.price = lowestPrice.toFixed(2);
+  if (products.length > 0) {
+    // Get the cheapest matching product
+    const cheapest = products.reduce((min, p) => p.price < min.price ? p : min);
+    baseResult.price = cheapest.price.toFixed(2);
     baseResult.availability = 'in_stock';
-    console.log(`[Poromagia] Lowest: €${lowestPrice.toFixed(2)}`);
+    console.log(`[Poromagia] Best match: "${cheapest.name}" at €${cheapest.price.toFixed(2)}`);
   }
 
   return baseResult;
@@ -140,14 +216,14 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
   const html = await fetchWithProxy(searchUrl);
   if (!html) return baseResult;
 
-  const prices = extractPricesFromHtml(html);
-  console.log(`[Basaari] Found ${prices.length} total prices`);
+  const products = extractBasaariProducts(html, cardName);
+  console.log(`[Basaari] Found ${products.length} matching products for "${cardName}"`);
 
-  if (prices.length > 0) {
-    const lowestPrice = Math.min(...prices);
-    baseResult.price = lowestPrice.toFixed(2);
+  if (products.length > 0) {
+    const cheapest = products.reduce((min, p) => p.price < min.price ? p : min);
+    baseResult.price = cheapest.price.toFixed(2);
     baseResult.availability = 'in_stock';
-    console.log(`[Basaari] Lowest: €${lowestPrice.toFixed(2)}`);
+    console.log(`[Basaari] Best match: "${cheapest.name}" at €${cheapest.price.toFixed(2)}`);
   }
 
   return baseResult;
