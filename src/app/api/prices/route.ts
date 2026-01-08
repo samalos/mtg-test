@@ -236,7 +236,7 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
 }
 
 async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
-  const searchUrl = `https://basaari.com/?searchTerm=${encodeURIComponent(cardName)}`;
+  const searchUrl = `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`;
   const baseResult: PriceResult = {
     store: 'basaari',
     storeName: 'Basaari',
@@ -247,21 +247,75 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
     link: searchUrl,
   };
 
-  const html = await fetchWithProxy(searchUrl);
-  if (!html) return baseResult;
+  // Try multiple URL patterns
+  const urlsToTry = [
+    `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`,
+    `https://basaari.com/?searchTerm=${encodeURIComponent(cardName)}`,
+    `https://basaari.com/api/products?searchTerm=${encodeURIComponent(cardName)}`,
+  ];
 
-  const products = extractBasaariProducts(html, cardName);
-  console.log(`[Basaari] Found ${products.length} matching products for "${cardName}"`);
+  for (const url of urlsToTry) {
+    console.log(`[Basaari] Trying: ${url}`);
+    const html = await fetchWithProxy(url);
+    if (!html) continue;
 
-  if (products.length > 0) {
-    // Use first match (most relevant)
-    const firstMatch = products[0];
-    baseResult.price = firstMatch.price.toFixed(2);
-    baseResult.availability = 'in_stock';
-    console.log(`[Basaari] First match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
+    // Check if it's JSON (API response)
+    if (html.trim().startsWith('{') || html.trim().startsWith('[')) {
+      try {
+        const data = JSON.parse(html);
+        const products = extractBasaariProductsFromApi(data, cardName);
+        if (products.length > 0) {
+          const firstMatch = products[0];
+          baseResult.price = firstMatch.price.toFixed(2);
+          baseResult.availability = 'in_stock';
+          baseResult.link = `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`;
+          console.log(`[Basaari] API match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
+          return baseResult;
+        }
+      } catch (e) {
+        console.error('[Basaari] Failed to parse API JSON');
+      }
+    }
+
+    // Parse as HTML
+    const products = extractBasaariProducts(html, cardName);
+    console.log(`[Basaari] Found ${products.length} matching products from ${url}`);
+
+    if (products.length > 0) {
+      const firstMatch = products[0];
+      baseResult.price = firstMatch.price.toFixed(2);
+      baseResult.availability = 'in_stock';
+      console.log(`[Basaari] First match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
+      return baseResult;
+    }
   }
 
   return baseResult;
+}
+
+function extractBasaariProductsFromApi(data: unknown, searchName: string): ProductMatch[] {
+  const products: ProductMatch[] = [];
+
+  // Handle array of products or {data: [...]} format
+  const items = Array.isArray(data) ? data : (data as {data?: unknown[]}).data || [];
+
+  for (const item of items as Array<{title?: string; variants?: Array<{title?: string; price?: number; available?: boolean}>}>) {
+    const title = item.title || '';
+    const variants = item.variants || [];
+
+    for (const variant of variants) {
+      const variantTitle = variant.title || title;
+      const price = variant.price;
+
+      if (typeof price === 'number' && price > 0 && variant.available !== false) {
+        if (cardNamesMatch(searchName, variantTitle) || cardNamesMatch(searchName, title)) {
+          products.push({ name: variantTitle || title, price });
+        }
+      }
+    }
+  }
+
+  return products;
 }
 
 function getCardmarketResult(cardName: string, scryfallData: ScryfallCard | null): PriceResult {
