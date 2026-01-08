@@ -39,8 +39,8 @@ async function fetchFromScryfall(cardName: string): Promise<ScryfallCard | null>
 }
 
 function getPoromagiaResult(cardName: string): PriceResult {
-  // Poromagia blocks automated requests, so we provide a search link
-  const searchUrl = `https://poromagia.com/en/catalogue/mtg-singles/?q=${encodeURIComponent(cardName)}`;
+  // Poromagia search URL - works when clicked in browser
+  const searchUrl = `https://poromagia.com/en/search/?q=${encodeURIComponent(cardName)}`;
 
   return {
     store: 'poromagia',
@@ -50,23 +50,21 @@ function getPoromagiaResult(cardName: string): PriceResult {
     currency: 'EUR',
     availability: 'unknown',
     link: searchUrl,
-    error: 'Click link to check price (site blocks automated requests)',
   };
 }
 
 function getBasaariResult(cardName: string): PriceResult {
-  // Basaari - provide search link
-  const searchUrl = `https://www.basaari.com/magic/singlet?s=${encodeURIComponent(cardName)}`;
+  // Basaari Magic singles collection with search
+  const searchUrl = `https://basaari.com/magic/singlet?q=${encodeURIComponent(cardName)}`;
 
   return {
     store: 'basaari',
     storeName: 'Basaari',
-    storeUrl: 'https://www.basaari.com',
+    storeUrl: 'https://basaari.com',
     price: null,
     currency: 'EUR',
     availability: 'unknown',
     link: searchUrl,
-    error: 'Click link to check price (site blocks automated requests)',
   };
 }
 
@@ -91,7 +89,6 @@ function getCardmarketResult(cardName: string, scryfallData: ScryfallCard | null
   } else {
     // Fallback to search URL
     baseResult.link = `https://www.cardmarket.com/en/Magic/Products/Search?searchString=${encodeURIComponent(cardName)}`;
-    baseResult.error = 'Card not found';
   }
 
   return baseResult;
@@ -110,16 +107,16 @@ export async function GET(request: NextRequest) {
 
   // Get results for all stores
   const results: PriceResult[] = [
+    getCardmarketResult(cardName, scryfallData),
     getPoromagiaResult(cardName),
     getBasaariResult(cardName),
-    getCardmarketResult(cardName, scryfallData),
   ];
 
   // Add Scryfall as a bonus source with USD price
   if (scryfallData && scryfallData.prices.usd) {
     results.push({
       store: 'scryfall',
-      storeName: 'Scryfall (USD)',
+      storeName: 'TCGPlayer (USD)',
       storeUrl: 'https://scryfall.com',
       price: scryfallData.prices.usd,
       currency: 'USD',
