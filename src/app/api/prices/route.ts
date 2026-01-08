@@ -147,6 +147,7 @@ function extractPoromagiaProducts(html: string, searchName: string): ProductMatc
 
 function extractBasaariProducts(html: string, searchName: string): ProductMatch[] {
   const products: ProductMatch[] = [];
+  const allFound: string[] = [];
 
   // Method 1: Parse __NEXT_DATA__ JSON
   const nextDataMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/);
@@ -154,51 +155,43 @@ function extractBasaariProducts(html: string, searchName: string): ProductMatch[
     try {
       const data = JSON.parse(nextDataMatch[1]);
       const jsonStr = JSON.stringify(data);
+      console.log(`[Basaari] __NEXT_DATA__ size: ${jsonStr.length} chars`);
 
-      // Find all title-price pairs in the JSON
-      const pairRegex = /"title"\s*:\s*"([^"]+)"[^}]*?"price"\s*:\s*([0-9.]+)/g;
+      // Find all title-price pairs in the JSON (more flexible regex)
+      const pairRegex = /"title"\s*:\s*"([^"]{3,100})"[\s\S]{0,500}?"price"\s*:\s*([0-9]+\.?[0-9]*)/g;
       let match;
       while ((match = pairRegex.exec(jsonStr)) !== null) {
         const [, name, priceStr] = match;
         const price = parseFloat(priceStr);
-        if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
-          products.push({ name, price });
-          console.log(`[Basaari] Found in NEXT_DATA: "${name}" at €${price}`);
+        if (price > 0 && price < 5000) {
+          allFound.push(`${name}: €${price}`);
+          if (cardNamesMatch(searchName, name)) {
+            products.push({ name, price });
+            console.log(`[Basaari] Match in NEXT_DATA: "${name}" at €${price}`);
+          }
         }
       }
+      console.log(`[Basaari] Total products in NEXT_DATA: ${allFound.length}`);
+      if (allFound.length > 0 && allFound.length <= 5) {
+        console.log(`[Basaari] Found: ${allFound.join(', ')}`);
+      }
     } catch (e) {
-      console.error('[Basaari] Failed to parse __NEXT_DATA__');
+      console.error('[Basaari] Failed to parse __NEXT_DATA__:', e);
     }
+  } else {
+    console.log('[Basaari] No __NEXT_DATA__ found in HTML');
   }
 
   // Method 2: Look for product JSON objects anywhere in HTML
-  // Pattern: {"title":"Card Name",...,"price":1.23,...}
-  const productObjRegex = /\{[^{}]*"title"\s*:\s*"([^"]+)"[^{}]*"price"\s*:\s*([0-9.]+)[^{}]*\}/g;
+  const productObjRegex = /"title"\s*:\s*"([^"]{3,100})"[^}]{0,300}"price"\s*:\s*([0-9]+\.?[0-9]*)/g;
   let match;
   while ((match = productObjRegex.exec(html)) !== null) {
     const [, name, priceStr] = match;
     const price = parseFloat(priceStr);
     if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
-      // Avoid duplicates
       if (!products.some(p => p.name === name && p.price === price)) {
         products.push({ name, price });
-      }
-    }
-  }
-
-  // Method 3: Look for variant objects with price
-  const variantRegex = /"variants"\s*:\s*\[([\s\S]*?)\]/g;
-  while ((match = variantRegex.exec(html)) !== null) {
-    const variantsStr = match[1];
-    const variantPriceRegex = /"title"\s*:\s*"([^"]+)"[^}]*?"price"\s*:\s*([0-9.]+)/g;
-    let varMatch;
-    while ((varMatch = variantPriceRegex.exec(variantsStr)) !== null) {
-      const [, name, priceStr] = varMatch;
-      const price = parseFloat(priceStr);
-      if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
-        if (!products.some(p => p.name === name && p.price === price)) {
-          products.push({ name, price });
-        }
+        console.log(`[Basaari] Match in HTML: "${name}" at €${price}`);
       }
     }
   }
