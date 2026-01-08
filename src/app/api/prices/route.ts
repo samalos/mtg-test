@@ -148,24 +148,58 @@ function extractPoromagiaProducts(html: string, searchName: string): ProductMatc
 function extractBasaariProducts(html: string, searchName: string): ProductMatch[] {
   const products: ProductMatch[] = [];
 
-  // Look for JSON product data with title and price
-  const jsonProductRegex = /"title"\s*:\s*"([^"]+)"[\s\S]*?"price"\s*:\s*([0-9.]+)/g;
-  let match;
-  while ((match = jsonProductRegex.exec(html)) !== null) {
-    const [, name, priceStr] = match;
-    const price = parseFloat(priceStr);
-    if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
-      products.push({ name, price });
+  // Method 1: Parse __NEXT_DATA__ JSON
+  const nextDataMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/);
+  if (nextDataMatch) {
+    try {
+      const data = JSON.parse(nextDataMatch[1]);
+      const jsonStr = JSON.stringify(data);
+
+      // Find all title-price pairs in the JSON
+      const pairRegex = /"title"\s*:\s*"([^"]+)"[^}]*?"price"\s*:\s*([0-9.]+)/g;
+      let match;
+      while ((match = pairRegex.exec(jsonStr)) !== null) {
+        const [, name, priceStr] = match;
+        const price = parseFloat(priceStr);
+        if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
+          products.push({ name, price });
+          console.log(`[Basaari] Found in NEXT_DATA: "${name}" at €${price}`);
+        }
+      }
+    } catch (e) {
+      console.error('[Basaari] Failed to parse __NEXT_DATA__');
     }
   }
 
-  // Also try reverse order: price then title
-  const reverseRegex = /"price"\s*:\s*([0-9.]+)[\s\S]*?"title"\s*:\s*"([^"]+)"/g;
-  while ((match = reverseRegex.exec(html)) !== null) {
-    const [, priceStr, name] = match;
+  // Method 2: Look for product JSON objects anywhere in HTML
+  // Pattern: {"title":"Card Name",...,"price":1.23,...}
+  const productObjRegex = /\{[^{}]*"title"\s*:\s*"([^"]+)"[^{}]*"price"\s*:\s*([0-9.]+)[^{}]*\}/g;
+  let match;
+  while ((match = productObjRegex.exec(html)) !== null) {
+    const [, name, priceStr] = match;
     const price = parseFloat(priceStr);
     if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
-      products.push({ name, price });
+      // Avoid duplicates
+      if (!products.some(p => p.name === name && p.price === price)) {
+        products.push({ name, price });
+      }
+    }
+  }
+
+  // Method 3: Look for variant objects with price
+  const variantRegex = /"variants"\s*:\s*\[([\s\S]*?)\]/g;
+  while ((match = variantRegex.exec(html)) !== null) {
+    const variantsStr = match[1];
+    const variantPriceRegex = /"title"\s*:\s*"([^"]+)"[^}]*?"price"\s*:\s*([0-9.]+)/g;
+    let varMatch;
+    while ((varMatch = variantPriceRegex.exec(variantsStr)) !== null) {
+      const [, name, priceStr] = varMatch;
+      const price = parseFloat(priceStr);
+      if (cardNamesMatch(searchName, name) && price > 0 && price < 5000) {
+        if (!products.some(p => p.name === name && p.price === price)) {
+          products.push({ name, price });
+        }
+      }
     }
   }
 
@@ -191,11 +225,11 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
   console.log(`[Poromagia] Found ${products.length} matching products for "${cardName}"`);
 
   if (products.length > 0) {
-    // Get the cheapest matching product
-    const cheapest = products.reduce((min, p) => p.price < min.price ? p : min);
-    baseResult.price = cheapest.price.toFixed(2);
+    // Use first result (most relevant) since Poromagia sorts by relevancy
+    const firstMatch = products[0];
+    baseResult.price = firstMatch.price.toFixed(2);
     baseResult.availability = 'in_stock';
-    console.log(`[Poromagia] Best match: "${cheapest.name}" at €${cheapest.price.toFixed(2)}`);
+    console.log(`[Poromagia] First match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
   }
 
   return baseResult;
@@ -220,10 +254,11 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
   console.log(`[Basaari] Found ${products.length} matching products for "${cardName}"`);
 
   if (products.length > 0) {
-    const cheapest = products.reduce((min, p) => p.price < min.price ? p : min);
-    baseResult.price = cheapest.price.toFixed(2);
+    // Use first match (most relevant)
+    const firstMatch = products[0];
+    baseResult.price = firstMatch.price.toFixed(2);
     baseResult.availability = 'in_stock';
-    console.log(`[Basaari] Best match: "${cheapest.name}" at €${cheapest.price.toFixed(2)}`);
+    console.log(`[Basaari] First match: "${firstMatch.name}" at €${firstMatch.price.toFixed(2)}`);
   }
 
   return baseResult;
