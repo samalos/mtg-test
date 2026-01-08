@@ -57,8 +57,11 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
       },
       signal: AbortSignal.timeout(15000),
+      cache: 'no-store',
     });
 
     if (!response.ok) {
@@ -67,6 +70,7 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
     }
 
     const html = await response.text();
+    console.log(`[Poromagia] Fetched ${html.length} bytes of HTML`);
 
     // Parse JSON data from the ecommerce tracking script
     // Look for patterns like: "name": "Lightning Bolt - Set", ... "excl_tax": Decimal('X.XX'), "tax": Decimal('Y.YY')
@@ -83,6 +87,8 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
         url: url.startsWith('http') ? url : `https://poromagia.com${url}`,
       });
     }
+
+    console.log(`[Poromagia] Found ${products.length} products via FixedPrice regex`);
 
     // Method 2: Try alternate format - look for product cards with prices
     if (products.length === 0) {
@@ -145,8 +151,11 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml',
         'Accept-Language': 'en-US,en;q=0.5',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
       },
       signal: AbortSignal.timeout(15000),
+      cache: 'no-store',
     });
 
     if (!response.ok) {
@@ -155,10 +164,12 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
     }
 
     const html = await response.text();
+    console.log(`[Basaari] Fetched ${html.length} bytes of HTML`);
 
     // Look for price patterns in the HTML
     // Basaari uses formats like: "price":0.87 or €X.XX
     const jsonPrices = html.match(/"price"\s*:\s*([0-9]+\.?[0-9]*)/g);
+    console.log(`[Basaari] Found ${jsonPrices?.length || 0} JSON price patterns`);
     const euroPrices = html.match(/€\s*([0-9]+[.,][0-9]{2})|([0-9]+[.,][0-9]{2})\s*€/g);
 
     // Also check for product data in Next.js hydration

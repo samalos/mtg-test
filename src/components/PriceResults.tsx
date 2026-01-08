@@ -168,8 +168,8 @@ export default function PriceResults({ results, cardName, isLoading }: PriceResu
 
       <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl">
         <p className="text-sm text-blue-800 dark:text-blue-300">
-          <strong>Note:</strong> Cardmarket prices are fetched automatically via Scryfall API.
-          Finnish stores (Poromagia, Basaari) require manual checking as they block automated requests.
+          <strong>Note:</strong> Prices are fetched automatically when available.
+          If a price shows &quot;Check Price&quot;, the store may have blocked the request or the card wasn&apos;t found.
         </p>
       </div>
     </div>
