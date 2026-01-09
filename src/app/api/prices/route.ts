@@ -318,6 +318,19 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
     if (html) {
       console.log(`[Basaari] Proxy fetch got ${html.length} bytes`);
 
+      // Debug: Log HTML structure info
+      const hasNextData = html.includes('__NEXT_DATA__');
+      const hasProducts = html.includes('product') || html.includes('Product');
+      const hasPrice = html.includes('€') || html.includes('EUR') || html.includes('price');
+      const hasCardName = html.toLowerCase().includes(cardName.toLowerCase().split(' ')[0]);
+      console.log(`[Basaari] HTML contains: __NEXT_DATA__=${hasNextData}, products=${hasProducts}, price=${hasPrice}, cardName=${hasCardName}`);
+
+      // Log sample of HTML around product/price keywords
+      const priceIndex = html.indexOf('€');
+      if (priceIndex > -1) {
+        console.log(`[Basaari] Sample around €:`, html.substring(Math.max(0, priceIndex - 100), priceIndex + 100));
+      }
+
       const price = extractBasaariPrice(html, cardName);
       if (price) {
         baseResult.price = price.toFixed(2);
