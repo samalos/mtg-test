@@ -179,7 +179,35 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
 }
 
 async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
-  const searchUrl = `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`;
+  // Try multiple URL patterns to find the correct one
+  const searchUrls = [
+    `https://basaari.com/search?q=${encodeURIComponent(cardName)}`,
+    `https://basaari.com/tuotteet/magic?searchTerm=${encodeURIComponent(cardName)}`,
+    `https://basaari.com/products/magic?search=${encodeURIComponent(cardName)}`,
+    `https://basaari.com/mtg?searchTerm=${encodeURIComponent(cardName)}`,
+    `https://basaari.com/kauppa/magic?searchTerm=${encodeURIComponent(cardName)}`,
+  ];
+
+  // Find which URL works
+  let searchUrl = searchUrls[0]; // Default
+  for (const url of searchUrls) {
+    try {
+      console.log(`[Basaari] Testing URL pattern: ${url}`);
+      const response = await fetch(url, {
+        method: 'HEAD',
+        signal: AbortSignal.timeout(3000),
+      });
+      console.log(`[Basaari] URL ${url} returned ${response.status}`);
+      if (response.ok || response.status !== 404) {
+        searchUrl = url;
+        console.log(`[Basaari] Found working URL pattern: ${url}`);
+        break;
+      }
+    } catch (error) {
+      console.log(`[Basaari] URL test error:`, (error as Error).message);
+    }
+  }
+
   const baseResult: PriceResult = {
     store: 'basaari',
     storeName: 'Basaari',
@@ -187,8 +215,10 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
     price: null,
     currency: 'EUR',
     availability: 'unknown',
-    link: searchUrl,
+    link: searchUrl, // Use the working URL
   };
+
+  console.log(`[Basaari] Using search URL: ${searchUrl}`);
 
   try {
     // Method 1: Try direct API endpoints (many stores have these)
