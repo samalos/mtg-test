@@ -187,17 +187,56 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
   };
 
   try {
-    // Basaari uses client-side rendering. Try using JS rendering services.
+    // Method 1: Try direct API endpoints (many stores have these)
+    const apiEndpoints = [
+      // Shopify-style search API
+      `https://basaari.com/search/suggest.json?q=${encodeURIComponent(cardName)}&resources[type]=product`,
+      `https://basaari.com/api/products/search?q=${encodeURIComponent(cardName)}`,
+      // Next.js API route pattern
+      `https://basaari.com/api/search?q=${encodeURIComponent(cardName)}`,
+      `https://basaari.com/api/magic/search?term=${encodeURIComponent(cardName)}`,
+    ];
+
+    for (const apiUrl of apiEndpoints) {
+      try {
+        console.log(`[Basaari] Trying API: ${apiUrl}`);
+        const response = await fetch(apiUrl, {
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log(`[Basaari] API response:`, JSON.stringify(data).substring(0, 500));
+          const price = extractPriceFromApiResponse(data, cardName);
+          if (price) {
+            baseResult.price = price.toFixed(2);
+            baseResult.availability = 'in_stock';
+            console.log(`[Basaari] Found price from API: €${price.toFixed(2)}`);
+            return baseResult;
+          }
+        }
+      } catch (error) {
+        console.log(`[Basaari] API error:`, (error as Error).message);
+      }
+    }
+
+    // Method 2: Try JS rendering services
     const renderServices = [
-      // Rendertron (Google's headless Chrome rendering solution)
+      // Rendertron
       `https://render-tron.appspot.com/render/${encodeURIComponent(searchUrl)}`,
-      // Microlink API - extracts data from websites
+      // Microlink
       `https://api.microlink.io/?url=${encodeURIComponent(searchUrl)}&screenshot=false&pdf=false`,
+      // Web Archive (might have cached version with prices)
+      `https://web.archive.org/web/2024/${searchUrl}`,
     ];
 
     for (const serviceUrl of renderServices) {
       try {
-        console.log(`[Basaari] Trying render service: ${serviceUrl.split('?')[0]}`);
+        console.log(`[Basaari] Trying render service: ${serviceUrl.split('?')[0].substring(0, 50)}`);
         const response = await fetch(serviceUrl, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -215,7 +254,6 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
         let html = '';
 
         if (contentType.includes('application/json')) {
-          // Microlink returns JSON
           const json = await response.json();
           html = json.data?.html || JSON.stringify(json);
           console.log(`[Basaari] Got JSON response, html length: ${html.length}`);
@@ -226,7 +264,6 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
 
         if (html.length < 1000) continue;
 
-        // Extract prices from rendered HTML
         const price = extractBasaariPrice(html, cardName);
         if (price) {
           baseResult.price = price.toFixed(2);
@@ -239,9 +276,13 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
       }
     }
 
-    // Fallback: Try direct fetch with proxy (in case they added server-side rendering)
+    // Method 3: Try direct fetch with various proxies
     const html = await fetchWithProxy(searchUrl);
     if (html) {
+      console.log(`[Basaari] Direct fetch got ${html.length} bytes`);
+      // Log a sample of HTML to debug structure
+      console.log(`[Basaari] HTML sample:`, html.substring(0, 1000));
+
       const price = extractBasaariPrice(html, cardName);
       if (price) {
         baseResult.price = price.toFixed(2);
@@ -254,6 +295,64 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
   }
 
   return baseResult;
+}
+
+function extractPriceFromApiResponse(data: unknown, searchName: string): number | null {
+  const searchLower = searchName.toLowerCase();
+
+  // Handle various API response formats
+  const traverse = (obj: unknown): number | null => {
+    if (!obj || typeof obj !== 'object') return null;
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        const price = traverse(item);
+        if (price) return price;
+      }
+      return null;
+    }
+
+    const record = obj as Record<string, unknown>;
+
+    // Check if this object represents a product matching our search
+    const name = (record.title || record.name || record.product_title || '') as string;
+    if (name.toLowerCase().includes(searchLower) ||
+        searchLower.split(' ').every(w => name.toLowerCase().includes(w))) {
+      // Look for price fields
+      const priceFields = ['price', 'price_min', 'price_max', 'compare_at_price', 'amount', 'value'];
+      for (const field of priceFields) {
+        const val = record[field];
+        if (typeof val === 'number' && val > 0 && val < 5000) {
+          return val;
+        }
+        if (typeof val === 'string') {
+          const num = parseFloat(val.replace(',', '.').replace(/[^0-9.]/g, ''));
+          if (num > 0 && num < 5000) return num;
+        }
+      }
+
+      // Check nested price object
+      if (record.price && typeof record.price === 'object') {
+        const priceObj = record.price as Record<string, unknown>;
+        const val = priceObj.amount || priceObj.value || priceObj.price;
+        if (typeof val === 'number' && val > 0) return val;
+        if (typeof val === 'string') {
+          const num = parseFloat(val.replace(',', '.'));
+          if (num > 0) return num;
+        }
+      }
+    }
+
+    // Recurse into nested objects
+    for (const key of Object.keys(record)) {
+      const price = traverse(record[key]);
+      if (price) return price;
+    }
+
+    return null;
+  };
+
+  return traverse(data);
 }
 
 function extractBasaariPrice(html: string, searchName: string): number | null {
