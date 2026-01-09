@@ -33,16 +33,17 @@ async function fetchFromScryfall(cardName: string): Promise<ScryfallCard | null>
 }
 
 async function fetchWithProxy(url: string, timeout = 15000): Promise<string | null> {
-  const urls = [
-    url,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  const urlHost = new URL(url).hostname;
+  const proxyMethods = [
+    { name: 'direct', url: url },
+    { name: 'allorigins', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
+    { name: 'corsproxy', url: `https://corsproxy.io/?${encodeURIComponent(url)}` },
   ];
 
-  for (const fetchUrl of urls) {
+  for (const method of proxyMethods) {
     try {
-      const isProxy = fetchUrl !== url;
-      const response = await fetch(fetchUrl, {
+      console.log(`[Fetch:${urlHost}] Trying ${method.name}...`);
+      const response = await fetch(method.url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -52,15 +53,18 @@ async function fetchWithProxy(url: string, timeout = 15000): Promise<string | nu
         cache: 'no-store',
       });
 
+      console.log(`[Fetch:${urlHost}] ${method.name} returned status ${response.status}`);
       if (response.ok) {
         const html = await response.text();
-        console.log(`[Fetch] Got ${html.length} bytes from ${isProxy ? 'proxy' : 'direct'}`);
+        console.log(`[Fetch:${urlHost}] Got ${html.length} bytes from ${method.name}`);
         if (html.length > 1000) return html;
+        console.log(`[Fetch:${urlHost}] Response too small (${html.length} bytes), trying next...`);
       }
     } catch (error) {
-      console.error(`[Fetch] Error:`, (error as Error).message);
+      console.log(`[Fetch:${urlHost}] ${method.name} error:`, (error as Error).message);
     }
   }
+  console.log(`[Fetch:${urlHost}] All methods failed, returning null`);
   return null;
 }
 
@@ -226,8 +230,8 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
 
     // Method 2: Try JS rendering services (only Microlink, others return 404)
     const renderServices = [
-      // Microlink API - can render JS and return HTML
-      `https://api.microlink.io/?url=${encodeURIComponent(searchUrl)}&screenshot=false&pdf=false&javascript=true&waitForTimeout=5000`,
+      // Microlink API - can render JS and return HTML (needs longer timeout for JS rendering)
+      `https://api.microlink.io/?url=${encodeURIComponent(searchUrl)}&screenshot=false&pdf=false&javascript=true&waitForTimeout=8000`,
     ];
 
     for (const serviceUrl of renderServices) {
@@ -238,7 +242,7 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/json,*/*',
           },
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(20000), // Longer timeout for JS rendering
         });
 
         if (!response.ok) {
