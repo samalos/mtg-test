@@ -257,10 +257,15 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
           const json = await response.json();
           html = json.data?.html || JSON.stringify(json);
           console.log(`[Basaari] Got JSON response, html length: ${html.length}`);
+          // Log the actual JSON structure for debugging
+          console.log(`[Basaari] JSON keys:`, Object.keys(json.data || json).join(', '));
         } else {
           html = await response.text();
           console.log(`[Basaari] Got HTML response, length: ${html.length}`);
         }
+
+        // Log sample even for small responses
+        console.log(`[Basaari] Response sample:`, html.substring(0, 500));
 
         if (html.length < 1000) continue;
 
@@ -314,7 +319,9 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
     }
 
     // Method 4: Try direct fetch with various proxies
+    console.log(`[Basaari] Trying proxy fetch...`);
     const html = await fetchWithProxy(searchUrl);
+    console.log(`[Basaari] Proxy fetch result: ${html ? html.length + ' bytes' : 'null'}`);
     if (html) {
       console.log(`[Basaari] Proxy fetch got ${html.length} bytes`);
 
