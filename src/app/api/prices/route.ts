@@ -179,32 +179,33 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
 }
 
 async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
-  // Try multiple URL patterns to find the correct one
-  const searchUrls = [
-    `https://basaari.com/search?q=${encodeURIComponent(cardName)}`,
-    `https://basaari.com/tuotteet/magic?searchTerm=${encodeURIComponent(cardName)}`,
-    `https://basaari.com/products/magic?search=${encodeURIComponent(cardName)}`,
-    `https://basaari.com/mtg?searchTerm=${encodeURIComponent(cardName)}`,
-    `https://basaari.com/kauppa/magic?searchTerm=${encodeURIComponent(cardName)}`,
-  ];
+  // Base URL pattern: /tuotteet/magic/singlet with search parameter
+  // Try different search query parameter names
+  const searchParams = ['search', 'q', 'searchTerm', 'name', 'query'];
+  const baseUrl = 'https://basaari.com/tuotteet/magic/singlet';
 
-  // Find which URL works
-  let searchUrl = searchUrls[0]; // Default
-  for (const url of searchUrls) {
+  let searchUrl = `${baseUrl}?search=${encodeURIComponent(cardName)}`;
+
+  // Test which search parameter works
+  for (const param of searchParams) {
+    const testUrl = `${baseUrl}?${param}=${encodeURIComponent(cardName)}`;
     try {
-      console.log(`[Basaari] Testing URL pattern: ${url}`);
-      const response = await fetch(url, {
+      console.log(`[Basaari] Testing search param: ${param}`);
+      const response = await fetch(testUrl, {
         method: 'HEAD',
-        signal: AbortSignal.timeout(3000),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        signal: AbortSignal.timeout(5000),
       });
-      console.log(`[Basaari] URL ${url} returned ${response.status}`);
-      if (response.ok || response.status !== 404) {
-        searchUrl = url;
-        console.log(`[Basaari] Found working URL pattern: ${url}`);
+      console.log(`[Basaari] ${param} returned status ${response.status}`);
+      if (response.ok) {
+        searchUrl = testUrl;
+        console.log(`[Basaari] Using search param: ${param}`);
         break;
       }
     } catch (error) {
-      console.log(`[Basaari] URL test error:`, (error as Error).message);
+      console.log(`[Basaari] ${param} error:`, (error as Error).message);
     }
   }
 
@@ -223,12 +224,13 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
   try {
     // Method 1: Try direct API endpoints (many stores have these)
     const apiEndpoints = [
+      // Based on the URL structure /tuotteet/magic/singlet, try API patterns
+      `https://basaari.com/api/tuotteet/magic/singlet?search=${encodeURIComponent(cardName)}`,
+      `https://basaari.com/api/products?search=${encodeURIComponent(cardName)}&category=magic`,
       // Shopify-style search API
       `https://basaari.com/search/suggest.json?q=${encodeURIComponent(cardName)}&resources[type]=product`,
-      `https://basaari.com/api/products/search?q=${encodeURIComponent(cardName)}`,
       // Next.js API route pattern
       `https://basaari.com/api/search?q=${encodeURIComponent(cardName)}`,
-      `https://basaari.com/api/magic/search?term=${encodeURIComponent(cardName)}`,
     ];
 
     for (const apiUrl of apiEndpoints) {
