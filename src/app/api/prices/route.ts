@@ -174,18 +174,161 @@ async function fetchPoromagiaPrice(cardName: string): Promise<PriceResult> {
   return baseResult;
 }
 
-function getBasaariResult(cardName: string): PriceResult {
-  // Basaari uses client-side rendering - search results load via JavaScript
-  // Server-side scraping is not possible without a headless browser
-  return {
+async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
+  const searchUrl = `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`;
+  const baseResult: PriceResult = {
     store: 'basaari',
     storeName: 'Basaari',
     storeUrl: 'https://basaari.com',
     price: null,
     currency: 'EUR',
     availability: 'unknown',
-    link: `https://basaari.com/magic?searchTerm=${encodeURIComponent(cardName)}`,
+    link: searchUrl,
   };
+
+  try {
+    // Basaari uses client-side rendering. Try using JS rendering services.
+    const renderServices = [
+      // Rendertron (Google's headless Chrome rendering solution)
+      `https://render-tron.appspot.com/render/${encodeURIComponent(searchUrl)}`,
+      // Microlink API - extracts data from websites
+      `https://api.microlink.io/?url=${encodeURIComponent(searchUrl)}&screenshot=false&pdf=false`,
+    ];
+
+    for (const serviceUrl of renderServices) {
+      try {
+        console.log(`[Basaari] Trying render service: ${serviceUrl.split('?')[0]}`);
+        const response = await fetch(serviceUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/json,*/*',
+          },
+          signal: AbortSignal.timeout(20000),
+        });
+
+        if (!response.ok) {
+          console.log(`[Basaari] Service returned ${response.status}`);
+          continue;
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        let html = '';
+
+        if (contentType.includes('application/json')) {
+          // Microlink returns JSON
+          const json = await response.json();
+          html = json.data?.html || JSON.stringify(json);
+          console.log(`[Basaari] Got JSON response, html length: ${html.length}`);
+        } else {
+          html = await response.text();
+          console.log(`[Basaari] Got HTML response, length: ${html.length}`);
+        }
+
+        if (html.length < 1000) continue;
+
+        // Extract prices from rendered HTML
+        const price = extractBasaariPrice(html, cardName);
+        if (price) {
+          baseResult.price = price.toFixed(2);
+          baseResult.availability = 'in_stock';
+          console.log(`[Basaari] Found price: €${price.toFixed(2)}`);
+          return baseResult;
+        }
+      } catch (error) {
+        console.error(`[Basaari] Render service error:`, (error as Error).message);
+      }
+    }
+
+    // Fallback: Try direct fetch with proxy (in case they added server-side rendering)
+    const html = await fetchWithProxy(searchUrl);
+    if (html) {
+      const price = extractBasaariPrice(html, cardName);
+      if (price) {
+        baseResult.price = price.toFixed(2);
+        baseResult.availability = 'in_stock';
+        console.log(`[Basaari] Found price via proxy: €${price.toFixed(2)}`);
+      }
+    }
+  } catch (error) {
+    console.error('[Basaari] Error:', error);
+  }
+
+  return baseResult;
+}
+
+function extractBasaariPrice(html: string, searchName: string): number | null {
+  // Look for product cards with prices
+  // Common patterns: "X.XX €", "€X.XX", "X,XX €"
+  const prices: number[] = [];
+
+  // Pattern 1: Look for price in product grid items
+  // Basaari typically shows products in a grid with price near product name
+  const productRegex = /<div[^>]*class="[^"]*product[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+  let match;
+
+  while ((match = productRegex.exec(html)) !== null) {
+    const block = match[1];
+    // Check if this block contains the card name
+    const normalizedBlock = block.toLowerCase();
+    const normalizedSearch = searchName.toLowerCase();
+
+    if (normalizedBlock.includes(normalizedSearch) ||
+        normalizedSearch.split(' ').every(word => normalizedBlock.includes(word.toLowerCase()))) {
+      // Extract price from this block
+      const priceMatch = block.match(/([0-9]+[.,][0-9]{2})\s*€|€\s*([0-9]+[.,][0-9]{2})/);
+      if (priceMatch) {
+        const priceStr = priceMatch[1] || priceMatch[2];
+        const price = parseFloat(priceStr.replace(',', '.'));
+        if (price > 0 && price < 5000) {
+          prices.push(price);
+        }
+      }
+    }
+  }
+
+  // Pattern 2: Generic price extraction near card name mentions
+  const searchWords = searchName.toLowerCase().split(' ');
+  const lines = html.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].toLowerCase();
+    if (searchWords.every(word => line.includes(word))) {
+      // Look for price in nearby lines
+      const context = lines.slice(Math.max(0, i - 3), Math.min(lines.length, i + 5)).join(' ');
+      const priceMatch = context.match(/([0-9]+[.,][0-9]{2})\s*€|€\s*([0-9]+[.,][0-9]{2})/);
+      if (priceMatch) {
+        const priceStr = priceMatch[1] || priceMatch[2];
+        const price = parseFloat(priceStr.replace(',', '.'));
+        if (price > 0 && price < 5000) {
+          prices.push(price);
+        }
+      }
+    }
+  }
+
+  // Pattern 3: Look for JSON data structures with prices
+  const jsonPriceRegex = /"price":\s*"?([0-9]+\.?[0-9]*)"?/gi;
+  while ((match = jsonPriceRegex.exec(html)) !== null) {
+    const price = parseFloat(match[1]);
+    if (price > 0 && price < 5000) {
+      prices.push(price);
+    }
+  }
+
+  // Pattern 4: Schema.org structured data
+  const schemaRegex = /"@type":\s*"Product"[\s\S]*?"price":\s*"?([0-9]+\.?[0-9]*)"?/gi;
+  while ((match = schemaRegex.exec(html)) !== null) {
+    const price = parseFloat(match[1]);
+    if (price > 0 && price < 5000) {
+      prices.push(price);
+    }
+  }
+
+  if (prices.length > 0) {
+    // Return first price (most relevant in search results)
+    return prices[0];
+  }
+
+  return null;
 }
 
 
@@ -221,12 +364,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Card name is required' }, { status: 400 });
   }
 
-  const [scryfallData, poromagiaResult] = await Promise.all([
+  const [scryfallData, poromagiaResult, basaariResult] = await Promise.all([
     fetchFromScryfall(cardName),
     fetchPoromagiaPrice(cardName),
+    fetchBasaariPrice(cardName),
   ]);
-
-  const basaariResult = getBasaariResult(cardName);
 
   const results: PriceResult[] = [
     getCardmarketResult(cardName, scryfallData),
