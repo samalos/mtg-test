@@ -360,6 +360,22 @@ function extractBasaariPrice(html: string, searchName: string): number | null {
   // Common patterns: "X.XX €", "€X.XX", "X,XX €"
   const prices: number[] = [];
 
+  // Pattern 0: Extract __NEXT_DATA__ from Next.js apps (most reliable)
+  const nextDataMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+  if (nextDataMatch) {
+    try {
+      const nextData = JSON.parse(nextDataMatch[1]);
+      console.log('[Basaari] Found __NEXT_DATA__, extracting prices...');
+      const price = extractPriceFromApiResponse(nextData, searchName);
+      if (price) {
+        console.log(`[Basaari] Found price in __NEXT_DATA__: €${price}`);
+        return price;
+      }
+    } catch (e) {
+      console.log('[Basaari] Failed to parse __NEXT_DATA__');
+    }
+  }
+
   // Pattern 1: Look for price in product grid items
   // Basaari typically shows products in a grid with price near product name
   const productRegex = /<div[^>]*class="[^"]*product[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
