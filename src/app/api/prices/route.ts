@@ -276,12 +276,47 @@ async function fetchBasaariPrice(cardName: string): Promise<PriceResult> {
       }
     }
 
-    // Method 3: Try direct fetch with various proxies
+    // Method 3: Try with crawler user agents (sites often pre-render for SEO)
+    const crawlerAgents = [
+      'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)',
+      'facebookexternalhit/1.1',
+    ];
+
+    for (const userAgent of crawlerAgents) {
+      try {
+        console.log(`[Basaari] Trying with crawler: ${userAgent.substring(0, 30)}...`);
+        const response = await fetch(searchUrl, {
+          headers: {
+            'User-Agent': userAgent,
+            'Accept': 'text/html,application/xhtml+xml',
+          },
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (response.ok) {
+          const html = await response.text();
+          console.log(`[Basaari] Crawler got ${html.length} bytes`);
+
+          if (html.length > 5000) {
+            const price = extractBasaariPrice(html, cardName);
+            if (price) {
+              baseResult.price = price.toFixed(2);
+              baseResult.availability = 'in_stock';
+              console.log(`[Basaari] Found price with crawler: €${price.toFixed(2)}`);
+              return baseResult;
+            }
+          }
+        }
+      } catch (error) {
+        console.log(`[Basaari] Crawler error:`, (error as Error).message);
+      }
+    }
+
+    // Method 4: Try direct fetch with various proxies
     const html = await fetchWithProxy(searchUrl);
     if (html) {
-      console.log(`[Basaari] Direct fetch got ${html.length} bytes`);
-      // Log a sample of HTML to debug structure
-      console.log(`[Basaari] HTML sample:`, html.substring(0, 1000));
+      console.log(`[Basaari] Proxy fetch got ${html.length} bytes`);
 
       const price = extractBasaariPrice(html, cardName);
       if (price) {
